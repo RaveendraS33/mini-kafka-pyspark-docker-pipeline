@@ -2,7 +2,7 @@
 
 A Dockerized streaming data quality pipeline with Kafka, PySpark Structured Streaming, and a synthetic transaction producer.
 
-This version avoids Windows-specific Spark setup such as `winutils.exe` by running Spark inside a Linux container.
+This version avoids Windows-specific Spark setup such as `winutils.exe` and `hadoop.dll` by running Spark inside a Linux container.
 
 ## Architecture
 
@@ -15,22 +15,24 @@ producer container
   -> output/health_report
 ```
 
+The `kafka-init` container creates the `transactions` topic before Spark starts, which avoids startup timing issues.
+
 ## Project Structure
 
 ```text
 mini-kafka-pyspark-docker-pipeline/
-├── docker-compose.yml
-├── producer/
-│   ├── Dockerfile
-│   ├── producer.py
-│   └── producer_kafka.py
-├── spark_jobs/
-│   ├── Dockerfile
-│   └── streaming_cleaning_job.py
-├── output/
-├── requirements.txt
-├── README.md
-└── .gitignore
+|-- docker-compose.yml
+|-- producer/
+|   |-- Dockerfile
+|   |-- producer.py
+|   `-- producer_kafka.py
+|-- spark_jobs/
+|   |-- Dockerfile
+|   `-- streaming_cleaning_job.py
+|-- output/
+|-- requirements.txt
+|-- README.md
+`-- .gitignore
 ```
 
 ## Run
@@ -38,7 +40,13 @@ mini-kafka-pyspark-docker-pipeline/
 Build and start Kafka plus Spark:
 
 ```powershell
-docker compose up --build kafka spark
+docker compose up --build -d kafka spark
+```
+
+Monitor Spark:
+
+```powershell
+docker compose logs -f spark
 ```
 
 Open another terminal and publish records:
@@ -59,6 +67,12 @@ Stop containers:
 
 ```powershell
 docker compose down
+```
+
+Clean generated runtime files before committing:
+
+```powershell
+Remove-Item -Recurse -Force output -ErrorAction SilentlyContinue
 ```
 
 ## Data Quality Rules
