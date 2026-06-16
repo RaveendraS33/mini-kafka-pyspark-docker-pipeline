@@ -2,6 +2,7 @@ services:
   kafka:
     image: apache/kafka:latest
     container_name: docker-pipeline-kafka
+    restart: unless-stopped
     ports:
       - "9092:9092"
     environment:
@@ -14,39 +15,58 @@ services:
       KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:9093
       KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
       KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
+    healthcheck:
+      test: ["CMD-SHELL", "/opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:9092 --list >/dev/null 2>&1"]
+      interval: 10s
+      timeout: 10s
+      retries: 10
+      start_period: 20s
+    networks:
+      - pipeline-net
 
   kafka-init:
     image: apache/kafka:latest
     container_name: docker-pipeline-kafka-init
     depends_on:
-      - kafka
+      kafka:
+        condition: service_healthy
+    env_file:
+      - .env
     command:
       [
         "/bin/bash",
         "-c",
-        "sleep 15 && /opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:9092 --create --if-not-exists --topic transactions --partitions 1 --replication-factor 1"
+        "/opt/kafka/bin/kafka-topics.sh --bootstrap-server ${KAFKA_BOOTSTRAP_SERVERS} --create --if-not-exists --topic ${KAFKA_TOPIC} --partitions 1 --replication-factor 1"
       ]
+    networks:
+      - pipeline-net
 
   spark:
     build:
       context: .
       dockerfile: spark_jobs/Dockerfile
     container_name: docker-pipeline-spark
+    restart: unless-stopped
     depends_on:
       kafka-init:
         condition: service_completed_successfully
     volumes:
       - ./output:/app/output
+    env_file:
+      - .env
     environment:
       HOME: /tmp
+      PYTHONPATH: /app
       SPARK_HOME: /opt/spark
       SPARK_SUBMIT_OPTS: "-Duser.home=/tmp -Divy.home=/tmp/.ivy2.5.2"
     command:
       [
         "/bin/bash",
         "-c",
-        "sleep 20 && /opt/spark/bin/spark-submit --conf spark.jars.ivy=/tmp/.ivy2.5.2 --packages org.apache.spark:spark-sql-kafka-0-10_2.13:4.1.1 spark_jobs/streaming_cleaning_job.py"
+        "/opt/spark/bin/spark-submit --conf spark.jars.ivy=/tmp/.ivy2.5.2 --packages org.apache.spark:spark-sql-kafka-0-10_2.13:${SPARK_PACKAGE_VERSION} spark_jobs/streaming_cleaning_job.py"
       ]
+    networks:
+      - pipeline-net
 
   producer:
     build:
@@ -56,10 +76,16 @@ services:
     depends_on:
       kafka-init:
         condition: service_completed_successfully
+    env_file:
+      - .env
     command:
       [
         "python",
-        "producer/producer_kafka.py",
-        "--bootstrap-servers",
-        "kafka:9092"
+        "producer/producer_kafka.py"
       ]
+    networks:
+      - pipeline-net
+
+networks:
+  pipeline-net:
+    driver: bridge

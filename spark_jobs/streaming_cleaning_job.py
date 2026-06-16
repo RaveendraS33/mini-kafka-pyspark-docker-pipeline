@@ -1,12 +1,26 @@
+import logging
+import os
 from pathlib import Path
 
 from pyspark.sql import SparkSession
 from pyspark.sql.functions import col, current_timestamp, expr, from_json, lit, when
 from pyspark.sql.types import DoubleType, IntegerType, StringType, StructField, StructType
 
+from src.quality.rules import (
+    ERROR_INVALID_AMOUNT,
+    ERROR_INVALID_EMAIL,
+    ERROR_MISSING_EVENT_TIME,
+    ERROR_MISSING_TRANSACTION_ID,
+    ERROR_MISSING_USER_ID,
+    VALID_REASON,
+)
 
-BOOTSTRAP_SERVERS = "kafka:9092"
-TOPIC = "transactions"
+
+logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+logger = logging.getLogger(__name__)
+
+BOOTSTRAP_SERVERS = os.getenv("KAFKA_BOOTSTRAP_SERVERS", "kafka:9092")
+TOPIC = os.getenv("KAFKA_TOPIC", "transactions")
 
 CLEAN_OUTPUT_PATH = Path("output/clean_data")
 BAD_OUTPUT_PATH = Path("output/bad_records")
@@ -33,12 +47,12 @@ TRANSACTION_SCHEMA = StructType(
 def add_quality_columns(records_df):
     return records_df.withColumn(
         "error_reason",
-        when(col("transaction_id").isNull(), lit("missing_transaction_id"))
-        .when(col("user_id").isNull(), lit("missing_user_id"))
-        .when(col("email").isNull() | ~col("email").contains("@"), lit("invalid_email"))
-        .when(col("amount").isNull() | (col("amount") <= 0), lit("invalid_amount"))
-        .when(col("event_time").isNull(), lit("missing_event_time"))
-        .otherwise(lit("valid")),
+        when(col("transaction_id").isNull(), lit(ERROR_MISSING_TRANSACTION_ID))
+        .when(col("user_id").isNull(), lit(ERROR_MISSING_USER_ID))
+        .when(col("email").isNull() | ~col("email").contains("@"), lit(ERROR_INVALID_EMAIL))
+        .when(col("amount").isNull() | (col("amount") <= 0), lit(ERROR_INVALID_AMOUNT))
+        .when(col("event_time").isNull(), lit(ERROR_MISSING_EVENT_TIME))
+        .otherwise(lit(VALID_REASON)),
     ).withColumn("processed_at", current_timestamp())
 
 
@@ -66,6 +80,7 @@ def main():
 
     spark = SparkSession.builder.appName("MiniKafkaPySparkDockerPipeline").getOrCreate()
     spark.sparkContext.setLogLevel("WARN")
+    logger.info("Starting Spark streaming data quality job")
 
     kafka_df = (
         spark.readStream.format("kafka")
@@ -81,8 +96,8 @@ def main():
     ).select("record.*", "kafka_timestamp")
 
     quality_df = add_quality_columns(parsed_df)
-    clean_df = quality_df.filter(col("error_reason") == "valid").drop("error_reason")
-    bad_df = quality_df.filter(col("error_reason") != "valid")
+    clean_df = quality_df.filter(col("error_reason") == VALID_REASON).drop("error_reason")
+    bad_df = quality_df.filter(col("error_reason") != VALID_REASON)
 
     clean_df.writeStream.format("json").option("path", str(CLEAN_OUTPUT_PATH)).option(
         "checkpointLocation", str(CHECKPOINT_PATH / "clean_data")
@@ -96,11 +111,11 @@ def main():
         "checkpointLocation", str(CHECKPOINT_PATH / "health_report")
     ).outputMode("append").start()
 
-    print("Streaming data quality job started.")
-    print(f"Reading Kafka topic: {TOPIC}")
-    print(f"Writing clean records to: {CLEAN_OUTPUT_PATH}")
-    print(f"Writing bad records to: {BAD_OUTPUT_PATH}")
-    print(f"Writing latest health report to: {HEALTH_REPORT_PATH}")
+    logger.info("Streaming data quality job started")
+    logger.info("Reading Kafka topic: %s", TOPIC)
+    logger.info("Writing clean records to: %s", CLEAN_OUTPUT_PATH)
+    logger.info("Writing bad records to: %s", BAD_OUTPUT_PATH)
+    logger.info("Writing latest health report to: %s", HEALTH_REPORT_PATH)
 
     spark.streams.awaitAnyTermination()
 
