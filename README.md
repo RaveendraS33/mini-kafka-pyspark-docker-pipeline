@@ -164,8 +164,8 @@ output/checkpoints/
 Run unit tests locally:
 
 ```powershell
-pip install -r requirements.txt
-pytest
+pip install -r requirements-dev.txt
+python -m pytest tests
 ```
 
 GitHub Actions also runs the unit tests on push and pull request.
